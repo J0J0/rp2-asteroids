@@ -32,10 +32,12 @@ for use with haste, respectively. The easiest way to do this, is via
 the "ready to use" [binary packages][hbin].
 
 Then you can just use `(haste-)cabal` as usual:
-> git clone "https://github.com/J0J0/rp2-asteroids.git"
-> cd rp2-asteroids
-> path/to/haste-cabal update
-> path/to/haste-cabal build --hastec-options='--opt-all'
+```
+git clone "https://github.com/J0J0/rp2-asteroids.git"
+cd rp2-asteroids
+path/to/haste-cabal update
+path/to/haste-cabal build --hastec-options='--opt-all'
+```
 
 This will produce a javascript file `rp2-asteroids.js` that can be
 used by any html file providing a (big enough) `canvas` element
