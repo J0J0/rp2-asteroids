@@ -1,0 +1,7 @@
+haste-compiler-*/
+haste-cabal
+hastec
+dist/
+.cabal-sandbox/
+cabal.sandbox.config
+rp2-asteroids.js
