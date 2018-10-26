@@ -388,9 +388,8 @@ haveCollisionRP (Rectangle a b c _) p = p_inside_rect
     rotate_ (x,y) = (co*x-si*y, si*x+co*y)
     transf        = rotate_ . translate_
     
-    (bound_x, _)  = transf b
-    (_, bound_y)  = transf c
-    (px,py)       = transf p
+    (bound_x, bound_y) = transf c
+    (px, py)           = transf p
     
     minmax bound   = if bound >= 0 then (0, bound) else (bound, 0)
     (min_x, max_x) = minmax bound_x
