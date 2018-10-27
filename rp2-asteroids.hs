@@ -90,7 +90,7 @@ main = do
         , shots        = []
         }
     
-    let change = modifyIORef' game_state_p
+    let change f = preventDefault >> modifyIORef' game_state_p f
     
     window `onEvent` KeyDown $ \ KeyData {keyCode = code} ->
         case toKey code of
