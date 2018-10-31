@@ -50,7 +50,7 @@ data GameState = GameState
     , shipBoost    :: Bool
     , shipRotate   :: Maybe Direction
     , shipShoot    :: Bool
-    , obstacles    :: [Object]
+    , obstacles    :: [Obstacle]
     , shots        :: [Shot]
     }
 
@@ -60,10 +60,23 @@ data Object = Object
     , velocity :: Vector   -- i.e. (Double,Double)
     }
 
+data Obstacle = Obstacle
+    { obstacleObj  :: Object
+    , obstacleSize :: Size
+    }
+
+data Size = Large | Medium | Small
+
 data Shot = Shot
     { shotObj  :: Object
     , lifetime :: Int    -- in milliseconds
     }
+
+obstacleSizeFactor :: Obstacle -> Double
+obstacleSizeFactor ob = case obstacleSize ob of
+    Large  -> 1.0
+    Medium -> 0.8
+    Small  -> 0.4
 
 
 main :: IO ()
@@ -119,7 +132,7 @@ runGame gs_p = do
         render (canvas gs) $ do
             drawShip (ship gs)
             mapM_ drawObstacle (obstacles gs)
-            mapM_ (drawShot . shotObj) (shots gs)
+            mapM_ drawShot (shots gs)
         
         case gameStatus gs of
             Running  -> setTimer (Once 10) (runGame gs_p) >> return ()
@@ -129,14 +142,15 @@ runGame gs_p = do
 -- given as (second) argument will be kept empty.
 generateObstacles :: (Double, Double)  -- ^ canvas size (width, height)
                   -> Point             -- ^ avoid this point
-                  -> IO [Object]
+                  -> IO [Obstacle]
 generateObstacles canvas_size avoid_p = do
     count <- randomRIO (1,10 :: Int)
     objs  <- sequence $ replicate count (randomRIO (lo,hi))
-    return $ map (push_away_from avoid_p) objs
+    return $ map (mk_obstacle . push_away_from avoid_p) objs
   where
     lo = Object { position = 0, angle = 0, velocity = 0 }
     hi = Object { position = canvas_size, angle = 2*pi, velocity = (1,1) }
+    mk_obstacle obj = Obstacle { obstacleObj = obj, obstacleSize = Large }
     
     -- This might produce "illegal" coordinates, so for the moment we
     -- rely on 'stepObjects' to fix this ...
@@ -166,7 +180,8 @@ stepObjects gs = gs { ship      = s''
     s'' = rotateShip gs (accelerateShip gs s')
     
     os  = obstacles gs
-    os' = map (moveAndWrapObject gs) os
+    os' = map (\ ob ->
+        ob{obstacleObj = moveAndWrapObject gs (obstacleObj ob)}) os
     
     shs  = shots gs
     shs' = mapMaybe delete_or_step shs
@@ -273,11 +288,11 @@ checkShotCollisions gs = gs { obstacles = remaining_obstacles
                             , shots     = remaining_shots }
   where
     -- for simplicity, we only check the shot's center at the moment:
-    hits_obstacle sh o =
-        haveCollisionRP (obstacleToRectangle o) (position (shotObj sh))
+    hits_obstacle sh ob =
+        haveCollisionRP (obstacleToRectangle ob) (position (shotObj sh))
     
-    select_obstacles :: Shot -> [Object]
-                     -> ([Object], [Object]) -- (hit by shot, not hit)
+    select_obstacles :: Shot -> [Obstacle]
+                     -> ([Obstacle], [Obstacle]) -- (hit by shot, not hit)
     select_obstacles sh = partition (sh `hits_obstacle`)
     
     -- go through all shots;
@@ -285,9 +300,34 @@ checkShotCollisions gs = gs { obstacles = remaining_obstacles
         foldl' go ([], obstacles gs) (shots gs)
     -- for each one, identify all obstacles it hits
     go (shs, obs) sh = case select_obstacles sh obs of
-        ([], _)    -> (sh:shs, obs)  -- if it hits nothing, keep the shot;
-        (_ , obs') -> (shs, obs')    -- otherwise discard the shot and keep
-                                     -- only obstacles not hit by the shot
+        ([], _) -> (sh:shs, obs)  -- if it hits nothing, keep the shot;
+        (obs_hit , obs_rest) ->
+            (shs, concatMap breakUpObstacle obs_hit ++ obs_rest)
+            -- otherwise discard the shot, break up those targets that are
+            -- hit and keep the rest
+
+breakUpObstacle :: Obstacle -> [Obstacle]
+breakUpObstacle ob = case obstacleSize ob of
+    Small  -> []
+    Medium -> break_into 4 Small
+    Large  -> break_into 2 Medium
+  where
+    break_into k s = map (\ (v, phi) ->
+        Obstacle { obstacleObj  = (obstacleObj ob) { velocity = v
+                                                   , angle    = phi }
+                 , obstacleSize = s }
+        ) (take k (dirs `zip` angles))
+    
+    dir@(dir_x,dir_y) =
+        let phi   = 0.45*pi
+            s     = sin phi
+            c     = cos phi
+            (x,y) = velocity (obstacleObj ob)
+        in (c*x-s*y, s*x+c*y)
+    dirs = [dir, -dir, (dir_y, -dir_x), (-dir_y, dir_x)]
+    
+    angles = let phi = angle (obstacleObj ob)
+             in [phi, phi+1.0, phi+2.7, phi+0.6]
 
 
 {- Graphics part -}
@@ -302,15 +342,17 @@ shipPicture :: Picture ()
 shipPicture = fill $
     path [(20,0), (-20,20), (-13,0), (-20,-20), (20,0)]
 
-drawObstacle :: Object -> Picture ()
-drawObstacle = drawObject obstaclePicture
+drawObstacle :: Obstacle -> Picture ()
+drawObstacle ob = drawObject (scale (f,f) obstaclePicture) (obstacleObj ob)
+  where
+    f = obstacleSizeFactor ob
 
 obstaclePicture :: Picture ()
 obstaclePicture = color (RGB 130 130 130) $ fill $
     rect (-25,-25) (25,25)
 
-drawShot :: Object -> Picture ()
-drawShot = drawObject shotPicture
+drawShot :: Shot -> Picture ()
+drawShot = drawObject shotPicture . shotObj
 
 shotPicture :: Picture ()
 shotPicture = color (RGB 200 0 0) $
@@ -333,11 +375,12 @@ shipToTriangles o = [Triangle x y z, Triangle x' y' z']
     [x,y,z]    = map (`transformedLike` o) points1
     [x',y',z'] = map (`transformedLike` o) points2
 
-obstacleToRectangle :: Object -> Rectangle
-obstacleToRectangle o = Rectangle a b c d
+obstacleToRectangle :: Obstacle -> Rectangle
+obstacleToRectangle ob = Rectangle a b c d
   where
-    points = [(-25,-25), (25,-25), (25,25), (-25,25)]
-    [a,b,c,d] = map (`transformedLike` o) points
+    points    = [(-25,-25), (25,-25), (25,25), (-25,25)]
+    scale_ q  = let f = obstacleSizeFactor ob in (f,f) * q
+    [a,b,c,d] = map ((`transformedLike` (obstacleObj ob)) . scale_) points
 
 -- | Apply the same transformation to a point that would
 -- be necessary to render the object.

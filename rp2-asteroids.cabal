@@ -1,5 +1,5 @@
 name:                rp2-asteroids
-version:             0.1
+version:             0.2
 synopsis:            Minimalistic Astroids implementation on the real projective plane
 license:             ISC
 license-file:        LICENSE
