@@ -50,7 +50,7 @@ data GameState = GameState
     , shipBoost    :: Bool
     , shipRotate   :: Maybe Direction
     , shipShoot    :: Bool
-    , obstacles    :: [Obstacle]
+    , asteroids    :: [Asteroid]
     , shots        :: [Shot]
     }
 
@@ -60,9 +60,9 @@ data Object = Object
     , velocity :: Vector   -- i.e. (Double,Double)
     }
 
-data Obstacle = Obstacle
-    { obstacleObj  :: Object
-    , obstacleSize :: Size
+data Asteroid = Asteroid
+    { asteroidObj  :: Object
+    , asteroidSize :: Size
     }
 
 data Size = Large | Medium | Small
@@ -72,8 +72,8 @@ data Shot = Shot
     , lifetime :: Int    -- in milliseconds
     }
 
-obstacleSizeFactor :: Obstacle -> Double
-obstacleSizeFactor ob = case obstacleSize ob of
+asteroidSizeFactor :: Asteroid -> Double
+asteroidSizeFactor ob = case asteroidSize ob of
     Large  -> 1.0
     Medium -> 0.8
     Small  -> 0.4
@@ -86,7 +86,7 @@ main = do
         (\ (w,h) -> (float w, float h))
     let start_position = (c_width/2, c_height/2)
     
-    initial_obstacles <- generateObstacles c_dims start_position
+    initial_asteroids <- generateAsteroids c_dims start_position
     game_state_p <- newIORef $ GameState
         { canvas       = game_canvas
         , canvasWidth  = c_width
@@ -99,7 +99,7 @@ main = do
         , shipBoost    = False
         , shipRotate   = Nothing
         , shipShoot    = False
-        , obstacles    = initial_obstacles
+        , asteroids    = initial_asteroids
         , shots        = []
         }
     
@@ -131,26 +131,26 @@ runGame gs_p = do
     readIORef gs_p >>= \ gs -> do
         render (canvas gs) $ do
             drawShip (ship gs)
-            mapM_ drawObstacle (obstacles gs)
+            mapM_ drawAsteroid (asteroids gs)
             mapM_ drawShot (shots gs)
         
         case gameStatus gs of
             Running  -> setTimer (Once 10) (runGame gs_p) >> return ()
             GameOver -> return ()
 
--- | Randomly generate some obstacle objects. A neighbourhood of the point
+-- | Randomly generate some asteroid objects. A neighbourhood of the point
 -- given as (second) argument will be kept empty.
-generateObstacles :: (Double, Double)  -- ^ canvas size (width, height)
+generateAsteroids :: (Double, Double)  -- ^ canvas size (width, height)
                   -> Point             -- ^ avoid this point
-                  -> IO [Obstacle]
-generateObstacles canvas_size avoid_p = do
+                  -> IO [Asteroid]
+generateAsteroids canvas_size avoid_p = do
     count <- randomRIO (1,10 :: Int)
     objs  <- sequence $ replicate count (randomRIO (lo,hi))
-    return $ map (mk_obstacle . push_away_from avoid_p) objs
+    return $ map (mk_asteroid . push_away_from avoid_p) objs
   where
     lo = Object { position = 0, angle = 0, velocity = 0 }
     hi = Object { position = canvas_size, angle = 2*pi, velocity = (1,1) }
-    mk_obstacle obj = Obstacle { obstacleObj = obj, obstacleSize = Large }
+    mk_asteroid obj = Asteroid { asteroidObj = obj, asteroidSize = Large }
     
     -- This might produce "illegal" coordinates, so for the moment we
     -- rely on 'stepObjects' to fix this ...
@@ -160,7 +160,7 @@ generateObstacles canvas_size avoid_p = do
             dist_sqr = let (x,y) = p_to_o in x^2+y^2
             
             too_close = dist_sqr < ( 30 {- ship "radius"     -} +
-                                     40 {- obstacle "radius" -} +
+                                     40 {- asteroid "radius" -} +
                                      80 {- safty margin      -}   )^2
             
             p_to_o_unit = let f = 1/(sqrt dist_sqr) in (f,f) * p_to_o
@@ -172,16 +172,16 @@ generateObstacles canvas_size avoid_p = do
 
 stepObjects :: GameState -> GameState
 stepObjects gs = gs { ship      = s''
-                    , obstacles = os'
+                    , asteroids = os'
                     , shots     = shs' }
   where
     s   = ship gs
     s'  = moveAndWrapObject gs s
     s'' = rotateShip gs (accelerateShip gs s')
     
-    os  = obstacles gs
+    os  = asteroids gs
     os' = map (\ ob ->
-        ob{obstacleObj = moveAndWrapObject gs (obstacleObj ob)}) os
+        ob{asteroidObj = moveAndWrapObject gs (asteroidObj ob)}) os
     
     shs  = shots gs
     shs' = mapMaybe delete_or_step shs
@@ -273,60 +273,60 @@ checkShipCollision gs = if have_collision
     -- For convex polygons, collision detection is relatively easy.
     -- Thus we decompose the ship's (non-convex!) shape into two
     -- triangles. Those we can probe against our (rectangle shaped)
-    -- obstacles (see also 'haveCollisionRT' below).
+    -- asteroids (see also 'haveCollisionRT' below).
     ship_ts = shipToTriangles (ship gs)
-    obs_rs  = map obstacleToRectangle (obstacles gs)
+    obs_rs  = map asteroidToRectangle (asteroids gs)
     
     have_collision = any collides_with_ship obs_rs
     
-    -- an obstacles collides with the ship if and only if (at least)
-    -- one of the two ship triangles collides with the obstacle
+    -- an asteroids collides with the ship if and only if (at least)
+    -- one of the two ship triangles collides with the asteroid
     collides_with_ship o_r = any (haveCollisionRT o_r) ship_ts
 
 checkShotCollisions :: GameState -> GameState
-checkShotCollisions gs = gs { obstacles = remaining_obstacles
+checkShotCollisions gs = gs { asteroids = remaining_asteroids
                             , shots     = remaining_shots }
   where
     -- for simplicity, we only check the shot's center at the moment:
-    hits_obstacle sh ob =
-        haveCollisionRP (obstacleToRectangle ob) (position (shotObj sh))
+    hits_asteroid sh ob =
+        haveCollisionRP (asteroidToRectangle ob) (position (shotObj sh))
     
-    select_obstacles :: Shot -> [Obstacle]
-                     -> ([Obstacle], [Obstacle]) -- (hit by shot, not hit)
-    select_obstacles sh = partition (sh `hits_obstacle`)
+    select_asteroids :: Shot -> [Asteroid]
+                     -> ([Asteroid], [Asteroid]) -- (hit by shot, not hit)
+    select_asteroids sh = partition (sh `hits_asteroid`)
     
     -- go through all shots;
-    (remaining_shots, remaining_obstacles) =
-        foldl' go ([], obstacles gs) (shots gs)
-    -- for each one, identify all obstacles it hits
-    go (shs, obs) sh = case select_obstacles sh obs of
+    (remaining_shots, remaining_asteroids) =
+        foldl' go ([], asteroids gs) (shots gs)
+    -- for each one, identify all asteroids it hits
+    go (shs, obs) sh = case select_asteroids sh obs of
         ([], _) -> (sh:shs, obs)  -- if it hits nothing, keep the shot;
         (obs_hit , obs_rest) ->
-            (shs, concatMap breakUpObstacle obs_hit ++ obs_rest)
+            (shs, concatMap breakUpAsteroid obs_hit ++ obs_rest)
             -- otherwise discard the shot, break up those targets that are
             -- hit and keep the rest
 
-breakUpObstacle :: Obstacle -> [Obstacle]
-breakUpObstacle ob = case obstacleSize ob of
+breakUpAsteroid :: Asteroid -> [Asteroid]
+breakUpAsteroid ob = case asteroidSize ob of
     Small  -> []
     Medium -> break_into 4 Small
     Large  -> break_into 2 Medium
   where
     break_into k s = map (\ (v, phi) ->
-        Obstacle { obstacleObj  = (obstacleObj ob) { velocity = v
+        Asteroid { asteroidObj  = (asteroidObj ob) { velocity = v
                                                    , angle    = phi }
-                 , obstacleSize = s }
+                 , asteroidSize = s }
         ) (take k (dirs `zip` angles))
     
     dir@(dir_x,dir_y) =
         let phi   = 0.45*pi
             s     = sin phi
             c     = cos phi
-            (x,y) = velocity (obstacleObj ob)
+            (x,y) = velocity (asteroidObj ob)
         in (c*x-s*y, s*x+c*y)
     dirs = [dir, -dir, (dir_y, -dir_x), (-dir_y, dir_x)]
     
-    angles = let phi = angle (obstacleObj ob)
+    angles = let phi = angle (asteroidObj ob)
              in [phi, phi+1.0, phi+2.7, phi+0.6]
 
 
@@ -342,13 +342,13 @@ shipPicture :: Picture ()
 shipPicture = fill $
     path [(20,0), (-20,20), (-13,0), (-20,-20), (20,0)]
 
-drawObstacle :: Obstacle -> Picture ()
-drawObstacle ob = drawObject (scale (f,f) obstaclePicture) (obstacleObj ob)
+drawAsteroid :: Asteroid -> Picture ()
+drawAsteroid ob = drawObject (scale (f,f) asteroidPicture) (asteroidObj ob)
   where
-    f = obstacleSizeFactor ob
+    f = asteroidSizeFactor ob
 
-obstaclePicture :: Picture ()
-obstaclePicture = color (RGB 130 130 130) $ fill $
+asteroidPicture :: Picture ()
+asteroidPicture = color (RGB 130 130 130) $ fill $
     rect (-25,-25) (25,25)
 
 drawShot :: Shot -> Picture ()
@@ -375,12 +375,12 @@ shipToTriangles o = [Triangle x y z, Triangle x' y' z']
     [x,y,z]    = map (`transformedLike` o) points1
     [x',y',z'] = map (`transformedLike` o) points2
 
-obstacleToRectangle :: Obstacle -> Rectangle
-obstacleToRectangle ob = Rectangle a b c d
+asteroidToRectangle :: Asteroid -> Rectangle
+asteroidToRectangle ob = Rectangle a b c d
   where
     points    = [(-25,-25), (25,-25), (25,25), (-25,25)]
-    scale_ q  = let f = obstacleSizeFactor ob in (f,f) * q
-    [a,b,c,d] = map ((`transformedLike` (obstacleObj ob)) . scale_) points
+    scale_ q  = let f = asteroidSizeFactor ob in (f,f) * q
+    [a,b,c,d] = map ((`transformedLike` (asteroidObj ob)) . scale_) points
 
 -- | Apply the same transformation to a point that would
 -- be necessary to render the object.
@@ -394,7 +394,7 @@ transformedLike p o = translate_ (rotate_ p)
     rotate_ (x,y) = (c*x-s*y, s*x+c*y)
     translate_ q  = q + position o
 
--- | This is the heart of the "ship vs obstacle" collision detection.
+-- | This is the heart of the "ship vs asteroid" collision detection.
 -- It is an ad hoc implementation for our special case of a collision
 -- detection algorithm for convex polygons based on the so called
 -- Separating Axis Theorem.
